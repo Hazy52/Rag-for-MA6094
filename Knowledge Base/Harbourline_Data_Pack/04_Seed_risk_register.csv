@@ -1,0 +1,16 @@
+﻿"# Seed risk register — from Harbourline Hub Feasibility Study, June 2025. Not updated since."
+risk_id,category,description,owner,likelihood_1to5,impact_1to5,score,mitigation,status
+R01,Funding,Grant conditions reduce eligible cost,R. Tan (left Council Aug 2026),3,4,12,Engage NRF early,Open
+R02,Programme,Hub open during works extends programme,Project Manager,4,4,16,Phased works,Open
+R03,Stakeholder,Noise and dust complaints from residents,Community Engagement,4,3,12,Work-hour limits,Open
+R04,Stakeholder,Residents complain about construction noise,TBC,3,3,9,Newsletter,Open
+R05,Operator,Childcare operator withdraws,Estate Development,2,5,10,Early agreement,Open
+R06,Operator,Active ageing operator not found,Estate Development,2,4,6,Market sounding,Open
+R07,Technical,Existing M&E in worse condition than surveyed,Contractor,3,4,12,Condition survey,Open
+R08,Technical,Hazardous materials in 1994 building,Contractor,1,4,4,None — not expected per desk study,Closed
+R09,Cost,Construction price inflation,Finance,4,3,12,Contingency,Open
+R10,Regulatory,Authority approvals delayed,TBC,3,3,9,Early submission,Open
+R11,Accessibility,Barrier-free access lost during lift works,,3,5,15,,Open
+R12,Scope,Rooftop garden structural capacity,Contractor,2,3,6,Engineer review,Open
+R13,Safety,Public interface with live works,Contractor,3,5,15,Hoarding and segregation,Open
+R14,Reporting,Weekly committee reporting effort,Project Manager,2,2,4,Templates,Open
