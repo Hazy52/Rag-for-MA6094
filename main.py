@@ -11,6 +11,8 @@ from pathlib import Path
 import re
 import sys
 
+from ingestion import IngestionOptions, scan_sources, prepare_chunks
+
 # -------------------- 公共配置：项目目录、生成模型和回答规则 --------------------
 # ROOT 根据 main.py 所在位置确定，因此项目换目录后仍能找到旁边的资料和 .env。
 ROOT = Path(__file__).resolve().parent
@@ -113,39 +115,44 @@ def file_hash(path: Path) -> str:
 
 
 # 记录文件的相对路径和哈希，供建库前后核对及报告追溯。
-# 这里只检查文件，真正提取正文在 rag_backend.py 的 build_index()。
+# 这里只检查文件，正文提取与切分由 ingestion.py 的 prepare_chunks() 完成。
 def knowledge_manifest(folder: Path) -> list[tuple[str, str]]:
     if not folder.is_dir():
         raise ValueError(f"找不到知识库文件夹：{folder}")
-    result = [(p.relative_to(folder).as_posix(), file_hash(p))
-              for p in sorted(folder.rglob("*"))
-              if p.is_file() and p.suffix.lower() in {".pdf", ".txt", ".csv"}]
-    if not result:
-        raise ValueError("知识库中没有 PDF、TXT 或 CSV 文件。")
-    return result
+    return [(p.relative_to(folder).as_posix(), file_hash(p)) for p in scan_sources(folder)]
 
 
 # -------------------- 步骤 8 / 11 的辅助函数：整理证据与来源 --------------------
-# 将 metadata 中保存的位置转换成人可读的引用：PDF 页码、TXT 行号、CSV 记录。
-def pdf_location(metadata: dict, language="en") -> str:
-    """展示 PDF 页码与大致方位；无可靠坐标时只显示页码。"""
-    base = f"第 {metadata['page']} 页" if language == "zh" else f"Page {metadata['page']}"
-    names = {"top": ("上部", "top"), "middle": ("中部", "middle"), "bottom": ("下部", "bottom")}
-    parts = metadata.get("pdf_region", "").split("-")
-    if not parts or any(part not in names for part in parts):
-        return base
-    labels = [names[part][0 if language == "zh" else 1] for part in parts]
-    region = ("至" if language == "zh" else " to ").join(labels)
-    return base + ("，" if language == "zh" else ", ") + region
-
-
+# 将 metadata 中保存的位置转换成人可读的引用：页码、幻灯片、工作表、TXT 行号、CSV 记录。
 def source_label(metadata: dict) -> str:
-    source = metadata["source"]
-    if metadata["file_type"] == "pdf":
-        return f"{source}, {pdf_location(metadata)}"
-    if metadata["file_type"] == "txt":
-        return f"{source}, lines {metadata['line_start']}-{metadata['line_end']}"
-    return f"{source}, record {metadata.get('record_id') or metadata['record_number']}"
+    return f"{metadata['source']}, {source_location(metadata, 'en')}"
+
+
+def source_location(metadata: dict, language="en") -> str:
+    def tr(zh, en):
+        return zh if language == "zh" else en
+    kind = metadata["file_type"]
+    if metadata.get("parser") == "docling":
+        parts = []
+        pages = metadata.get("slides") or metadata.get("pages", [])
+        if pages:
+            numbers = ", ".join(map(str, pages))
+            if kind == "pptx":
+                parts.append(tr(f"幻灯片 {numbers}", f"Slides {numbers}"))
+            elif kind != "xlsx":
+                parts.append(tr(f"页码 {numbers}", f"Pages {numbers}"))
+        if metadata.get("headings"):
+            parts.append(tr("标题：", "Headings: ") + " > ".join(metadata["headings"]))
+        if metadata.get("sheets"):
+            parts.append(tr("工作表：", "Sheets: ") + ", ".join(metadata["sheets"]))
+        if metadata.get("doc_items"):
+            parts.append(tr("文档元素：", "Document items: ") + ", ".join(metadata["doc_items"]))
+        return "; ".join(parts) or tr("文档内容", "Document content")
+    if kind == "txt":
+        return tr(f"第 {metadata['line_start']}–{metadata['line_end']} 行",
+                  f"Lines {metadata['line_start']}–{metadata['line_end']}")
+    record = metadata.get("record_id") or metadata.get("record_number", "N/A")
+    return tr(f"记录 ID：{record}", f"Record ID: {record}")
 
 
 # 给每段已召回的证据分配唯一编号，例如 Q001-E01，并附上原文和来源。
@@ -315,15 +322,7 @@ def markdown_evidence_entry(identifier: str, metadata: dict, language="zh") -> s
     """报告只展示来源和位置；模型请求仍使用 evidence_for 中的完整检索片段。"""
     def tr(zh, en):
         return localized(zh, en, language)
-    kind = metadata["file_type"]
-    if kind == "pdf":
-        location = pdf_location(metadata, language)
-    elif kind == "txt":
-        location = tr(f"第 {metadata['line_start']}–{metadata['line_end']} 行",
-                      f"Lines {metadata['line_start']}–{metadata['line_end']}")
-    else:
-        record = metadata.get("record_id") or metadata.get("record_number", "N/A")
-        location = tr(f"记录 ID：{record}", f"Record ID: {record}")
+    location = source_location(metadata, language)
     return (
         f"#### [{identifier}]\n\n"
         + tr("- **来源：** ", "- **Source:** ")
@@ -591,10 +590,34 @@ def main(argv=None) -> int:
     parser.add_argument("--choose", action="store_true", help="弹出问题文件选择窗口")
     parser.add_argument("--check", action="store_true", help="仅检查问题格式，不加载知识库或调用模型")
     parser.add_argument("--retrieve-only", action="store_true", help="只检索并导出来源，不调用 DeepSeek")
+    parser.add_argument("--inspect-ingestion", metavar="JSON", help="将解析后的文本块和来源导出到 JSON；无需问题或 API 密钥")
+    parser.add_argument("--no-ocr", action="store_true", help="禁用 PDF/独立图片的 OCR")
+    parser.add_argument("--force-full-page-ocr", action="store_true", help="强制整页 OCR，用于扫描件")
     parser.add_argument("--knowledge-base", default=str(ROOT / "Knowledge Base"))
     parser.add_argument("--output-dir", help="报告目录，默认使用项目根目录（main.py 所在目录）")
     parser.add_argument("--top-k", type=int, default=3, help="每题检索片段数，默认 3")
     args = parser.parse_args(argv)
+    options = IngestionOptions(ocr=not args.no_ocr,
+                               force_full_page_ocr=args.force_full_page_ocr)
+    if args.inspect_ingestion:
+        if args.questions or args.choose or args.check:
+            parser.error("--inspect-ingestion 不接受问题文件、--choose 或 --check")
+        from rag_backend import load_tokenizer
+        knowledge_base = clean_path(args.knowledge_base)
+        target = clean_path(args.inspect_ingestion)
+        if target == knowledge_base or knowledge_base in target.parents:
+            parser.error("解析检查结果必须放在知识库之外")
+        if target.exists():
+            parser.error("解析检查输出文件已存在，请使用新文件名")
+        manifest = knowledge_manifest(knowledge_base)
+        chunks = prepare_chunks(knowledge_base, load_tokenizer(), options)
+        if knowledge_manifest(knowledge_base) != manifest:
+            raise ValueError("解析期间资料发生变化，请重试。")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("x", encoding="utf-8") as output:
+            json.dump(chunks, output, ensure_ascii=False, indent=2)
+        print(f"已导出 {len(chunks)} 个文本块：{target}；未调用 DeepSeek。")
+        return 0
     if args.top_k < 1:
         parser.error("--top-k 必须大于 0")
     if args.choose and args.questions:
@@ -638,10 +661,10 @@ def main(argv=None) -> int:
     print("正在加载知识库、嵌入模型并建立索引；本批次只建立一次……", flush=True)
     from rag_backend import build_index
     # -------------------- 委托 rag_backend.py 完成步骤 1–5 --------------------
-    # 一次性读取资料 → 统一格式 → 分块 → 准备嵌入模型 → 向量化并建内存索引。
+    # rag_backend 调用 ingestion.prepare_chunks 读取与切分，再用 E5 向量化并建立内存索引。
     # 返回 vectorstore 用于召回，tokenizer 用于检查每道查询的长度。
     # 想看“如何分块”和“索引如何建立”，请跳转到 build_index() 的定义。
-    vectorstore, tokenizer = build_index(knowledge_base)
+    vectorstore, tokenizer = build_index(knowledge_base, options)
     # 再次检查文件指纹，避免建库期间资料变化却继续使用不一致的版本。
     if knowledge_manifest(knowledge_base) != manifest:
         raise ValueError("建库期间原始资料发生变化，请待资料保存完成后重试。")

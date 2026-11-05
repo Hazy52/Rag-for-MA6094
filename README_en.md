@@ -6,7 +6,7 @@
 
 1. If you copied this project from another computer, recreate `.venv` locally instead of reusing the copied environment. You do not need to delete a working environment on your current computer.
 2. Make sure the dependencies listed in `requirements.txt` are installed in your project's virtual environment.
-3. Place your source documents in `Knowledge Base`. Supported formats are PDF, TXT, and CSV.
+3. Place your source documents in `Knowledge Base`. Supported formats: PDF, TXT, CSV, Markdown, DOCX, PPTX, XLSX, HTML, and PNG/JPEG/TIFF/BMP/WebP images.
 4. This version is configured to use DeepSeek. Set `DEEPSEEK_API_KEY` in `.env` and ensure your account has sufficient API credits. Do not share your API key.
 5. From an activated project terminal, run `python main.py --choose`. Select the Markdown question file downloaded from Opal in the file selection window.
 6. A Chinese Markdown report and an English Markdown report will be saved directly to the project root (the directory containing `main.py`).
@@ -31,7 +31,7 @@ Add the following instructions to the Opal agent responsible for preparing quest
 
 ## Updating Source Documents
 
-Store original source documents in `Knowledge Base`. PDF, TXT, and CSV are supported. Each run rebuilds the index from the files currently in that directory.
+Store original source documents in `Knowledge Base`. Each run rebuilds the index from the files currently in that directory.
 New, modified, or deleted source documents therefore take effect on the next run. Do not change the source documents during a run.
 Reports retain an overall knowledge base version hash, but omit the full file list and per-file SHA256 values. Each question still includes source filenames, locations, and evidence identifiers. The version hash is not a backup of the original documents.
 Historical reports still contain information from earlier versions. After changing the source documents, generate a new report and replace the old input in Opal.
@@ -51,8 +51,36 @@ or `--top-k 5` to change the number of retrieved passages per question (default:
 Source locations are recorded as follows:
 
 - TXT: line numbers.
-- PDF: page numbers plus top, middle or bottom based on text coordinates. Passages spanning regions show a range (such as top to middle); unreliable coordinates fall back to page numbers only. Regions indicate the approximate location of the retrieved passage.
+- Docling PDF/images: available page numbers; PPTX: slide numbers; XLSX: sheet names; other formats: headings and document element references. Converted line numbers are never presented as original source lines.
 - CSV: record IDs.
 
-The system uses recursive character splitting, with a maximum of 800 characters per chunk and a target overlap of up to 120 characters between adjacent chunks.
-Parent-child chunking and cross-session decision memory have not been implemented.
+## Docling ingestion
+
+All sources enter through `ingestion.prepare_chunks()`: TXT/CSV retain their existing readers and splitters, while PDF and other complex formats use Docling. Both paths return text and source metadata in the same format. The old PDF reader and `--pdf-parser` option have been removed; PDF always uses Docling.
+
+- `ingestion.py`: scanning, TXT/CSV reading and splitting, Docling conversion and chunking, and final length validation.
+- `rag_backend.py`: E5/tokenizer loading, embeddings and the in-memory index.
+- `main.py`: question input, orchestration, retrieval, answer generation and reports; inspection calls the ingestion entry point directly.
+
+Install with `python -m pip install -r requirements.txt`. Docling 2.146.0 and docling-core 2.106.0 are pinned alongside the existing E5/torch dependencies.
+
+Docling parses PDF, images, Office, Markdown and HTML. HybridChunker preserves document structure and repeats Markdown table headers across chunks, using the E5 tokenizer. TXT/CSV retain their existing readers, source notes and business IDs. They use 800-character chunks with a target 120-character overlap, with further token-aware splitting when necessary. Every final embedding input, including `passage:`, is checked against the 512-token limit.
+
+```powershell
+# Inspect extracted text and metadata without DeepSeek or an API key
+.\.venv\Scripts\python.exe main.py --inspect-ingestion work/chunks.json
+# Normal question selection
+.\.venv\Scripts\python.exe main.py --choose
+# Retrieval only
+.\.venv\Scripts\python.exe main.py Questions.md --retrieve-only --top-k 5
+# Full-page OCR for scans
+.\.venv\Scripts\python.exe main.py --choose --force-full-page-ocr
+```
+
+Inspection output must be outside the knowledge base and must not already exist. It includes text, locations and token counts. Default RapidOCR recognizes Chinese and English; `--no-ocr` disables OCR. The first PDF/image conversion downloads layout, table and OCR models. CPU conversion can be slow. Hugging Face/Docling caches default to project `models`, honoring existing `HF_HUB_CACHE`/`DOCLING_CACHE_DIR` settings; RapidOCR may also store weights in its installation directory. Parsing runs locally without remote vision APIs. Failed/partial conversions and files without searchable content stop ingestion explicitly.
+
+Limitations: convert legacy `.ppt/.doc/.xls` to modern Office formats first. OCR extracts visible text, not the meaning of photos or diagrams; no picture-description model is enabled. Embedded Office images are not guaranteed to undergo OCR: export image-only slides to PDF or ingest their images separately. Excel formulas are not recalculated; calculate and save the workbook first. Review complex tables, handwriting and poor scans. E5 retrieval and the in-memory index remain; reranking, full-table SQL analytics, parent-child retrieval and cross-session memory are not implemented. Better extraction alone does not establish better answer accuracy.
+
+Tests: `python -m unittest discover -s tests -v` requires the cached E5 tokenizer. Set `RAG_TEST_OCR=1` to include actual PNG/scanned-PDF OCR tests; allow initial downloads with `HF_HUB_OFFLINE=0` and `TRANSFORMERS_OFFLINE=0`. Tests use synthetic temporary files and never call DeepSeek.
+
+References: [formats](https://docling-project.github.io/docling/usage/supported_formats/), [chunking](https://docling-project.github.io/docling/concepts/chunking/), [picture enrichment](https://docling-project.github.io/docling/usage/enrichments/).
