@@ -51,36 +51,5 @@ or `--top-k 5` to change the number of retrieved passages per question (default:
 Source locations are recorded as follows:
 
 - TXT: line numbers.
-- Docling PDF/images: available page numbers; PPTX: slide numbers; XLSX: sheet names; other formats: headings and document element references. Converted line numbers are never presented as original source lines.
+- Docling PDF/images: available page numbers; PPTX: slide numbers; XLSX: sheet names.
 - CSV: record IDs.
-
-## Docling ingestion
-
-All sources enter through `ingestion.prepare_chunks()`: TXT/CSV retain their existing readers and splitters, while PDF and other complex formats use Docling. Both paths return text and source metadata in the same format. The old PDF reader and `--pdf-parser` option have been removed; PDF always uses Docling.
-
-- `ingestion.py`: scanning, TXT/CSV reading and splitting, Docling conversion and chunking, and final length validation.
-- `rag_backend.py`: E5/tokenizer loading, embeddings and the in-memory index.
-- `main.py`: question input, orchestration, retrieval, answer generation and reports; inspection calls the ingestion entry point directly.
-
-Install with `python -m pip install -r requirements.txt`. Docling 2.146.0 and docling-core 2.106.0 are pinned alongside the existing E5/torch dependencies.
-
-Docling parses PDF, images, Office, Markdown and HTML. HybridChunker preserves document structure and repeats Markdown table headers across chunks, using the E5 tokenizer. TXT/CSV retain their existing readers, source notes and business IDs. They use 800-character chunks with a target 120-character overlap, with further token-aware splitting when necessary. Every final embedding input, including `passage:`, is checked against the 512-token limit.
-
-```powershell
-# Inspect extracted text and metadata without DeepSeek or an API key
-.\.venv\Scripts\python.exe main.py --inspect-ingestion work/chunks.json
-# Normal question selection
-.\.venv\Scripts\python.exe main.py --choose
-# Retrieval only
-.\.venv\Scripts\python.exe main.py Questions.md --retrieve-only --top-k 5
-# Full-page OCR for scans
-.\.venv\Scripts\python.exe main.py --choose --force-full-page-ocr
-```
-
-Inspection output must be outside the knowledge base and must not already exist. It includes text, locations and token counts. Default RapidOCR recognizes Chinese and English; `--no-ocr` disables OCR. The first PDF/image conversion downloads layout, table and OCR models. CPU conversion can be slow. Hugging Face/Docling caches default to project `models`, honoring existing `HF_HUB_CACHE`/`DOCLING_CACHE_DIR` settings; RapidOCR may also store weights in its installation directory. Parsing runs locally without remote vision APIs. Failed/partial conversions and files without searchable content stop ingestion explicitly.
-
-Limitations: convert legacy `.ppt/.doc/.xls` to modern Office formats first. OCR extracts visible text, not the meaning of photos or diagrams; no picture-description model is enabled. Embedded Office images are not guaranteed to undergo OCR: export image-only slides to PDF or ingest their images separately. Excel formulas are not recalculated; calculate and save the workbook first. Review complex tables, handwriting and poor scans. E5 retrieval and the in-memory index remain; reranking, full-table SQL analytics, parent-child retrieval and cross-session memory are not implemented. Better extraction alone does not establish better answer accuracy.
-
-Tests: `python -m unittest discover -s tests -v` requires the cached E5 tokenizer. Set `RAG_TEST_OCR=1` to include actual PNG/scanned-PDF OCR tests; allow initial downloads with `HF_HUB_OFFLINE=0` and `TRANSFORMERS_OFFLINE=0`. Tests use synthetic temporary files and never call DeepSeek.
-
-References: [formats](https://docling-project.github.io/docling/usage/supported_formats/), [chunking](https://docling-project.github.io/docling/concepts/chunking/), [picture enrichment](https://docling-project.github.io/docling/usage/enrichments/).
