@@ -1,0 +1,31 @@
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Downloaded model weights and caches
+/models/
+.cache/
+
+# Local inspection results, temporary work files and logs
+/work/
+*.log
+
+# Generated RAG reports
+rag_report_*.md
+rag_report_*.txt
+/Reports/
+
+# Local editor and operating-system files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
